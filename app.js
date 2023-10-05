@@ -2,83 +2,75 @@ const express = require('express');
 const mongoose = require('mongoose');
 const bodyParser = require('body-parser');
 const bcrypt = require('bcrypt');
+const winston = require('winston');
 
+const passport = require('passport');
+require('dotenv').config();
 const app = express();
-const port = 3000;
+require('./jwt-and-passport-auth/auth/auth');
+const routes = require('./jwt-and-passport-auth/routes/routes');
+const secureRoute = require('./jwt-and-passport-auth/routes/secure-routes');
+const productsRoute = require('./products/router');
+const categoryRoute = require('./category/router');
+const ordersRoute = require('./orders/router');
+const imageRoutes = require('./imageRoutes');
+const uploadFolder = 'uploads/';
 
-// Підключення до бази даних MongoDB (замініть URL на свій)
-const dbURL = 'mongodb://localhost:27017/usersDB';
-mongoose.connect(dbURL, { useNewUrlParser: true, useUnifiedTopology: true });
 
-// Схема та модель користувача
-const userSchema = new mongoose.Schema({
-    username: { type: String, required: true },
-    email: { type: String, required: true },
-    password: { type: String, required: true },
+
+const logger = winston.createLogger({
+    level: 'info', // Рівень логування (може бути 'info', 'warn', 'error', тощо)
+    format: winston.format.combine(
+        winston.format.timestamp(),
+        winston.format.printf(({ timestamp, level, message }) => {
+            return `${timestamp} [${level.toUpperCase()}]: ${message}`;
+        })
+    ),
+    transports: [
+        new winston.transports.Console(), // Вивід логів у консоль
+        new winston.transports.File({ filename: 'app.log' }), // Збереження логів у файл 'app.log'
+    ],
 });
 
-const User = mongoose.model('User', userSchema);
+app.use('/images', imageRoutes);
 
-// Парсер для даних POST-запитів
 app.use(bodyParser.json());
 
-// Реєстрація нового користувача
-app.post('/api/register', async (req, res) => {
-    try {
-        const { username, email, password } = req.body;
+app.use('/', routes);
 
-        // Перевірка, чи користувач з таким ім'ям або email вже існує
-        const existingUser = await User.findOne({
-            $or: [{ username: username }, { email: email }],
-        });
-        if (existingUser) {
-            return res.status(409).json({
-                error: "Користувач з таким ім'ям або email уже існує",
-            });
-        }
+// Plug in the JWT strategy as a middleware so only verified users can access this route.
+app.use('/user', passport.authenticate('jwt', { session: false }), secureRoute);
+app.use(
+    '/orders',
+    passport.authenticate('jwt', { session: false }),
+    ordersRoute
+);
+app.use(
+    '/products',
+    passport.authenticate('jwt', { session: false }),
+    productsRoute
+);
+app.use(
+    '/category',
+    passport.authenticate('jwt', { session: false }),
+    categoryRoute
+);
 
-        // Хешування паролю перед збереженням в базу даних
-        const saltRounds = 10;
-        const hashedPassword = await bcrypt.hash(password, saltRounds);
+// Handle errors.
 
-        const newUser = new User({ username, email, password: hashedPassword });
-        await newUser.save();
-
-        res.status(201).json({ message: 'Реєстрація успішна' });
-    } catch (error) {
-        console.error('Помилка реєстрації:', error);
-        res.status(500).json({ error: 'Помилка сервера' });
-    }
+app.use(function (err, req, res, next) {
+    logger.error(err);
+    res.status(err.status || 500);
+    res.end();
 });
 
-// Логін користувача
-app.post('/api/login', async (req, res) => {
-    try {
-        const { username, password } = req.body;
-
-        // Перевірка, чи існує користувач з таким ім'ям
-        const user = await User.findOne({ username: username });
-        if (!user) {
-            return res
-                .status(401)
-                .json({ error: "Невірне ім'я користувача або пароль" });
-        }
-
-        // Перевірка паролю
-        const isPasswordValid = await bcrypt.compare(password, user.password);
-        if (!isPasswordValid) {
-            return res
-                .status(401)
-                .json({ error: "Невірне ім'я користувача або пароль" });
-        }
-
-        res.json({ message: 'Успішний вхід' });
-    } catch (error) {
-        console.error('Помилка логіну:', error);
-        res.status(500).json({ error: 'Помилка сервера' });
-    }
+app.listen(3000, () => {
+    console.log('Server started.');
 });
 
-app.listen(port, () => {
-    console.log(`Сервер запущено на порті ${port}`);
+// Підключення до бази даних MongoDB (замініть URL на свій)
+
+mongoose.connect(process.env.DB_CONN, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
 });
